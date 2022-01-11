@@ -1,0 +1,218 @@
+#!/bin/sh
+export POSIXLY_CORRECT=yes
+set -eo pipefail
+# flags signalizing presence of "-n" and "-i" options
+NORM_FLAG=0
+REGEX_FLAG=0
+
+# report* variables hold specific lines of histogram
+# count* variables hold # of hashes to be concatenated to report* variables
+report_100B="<100 B  : ";             count_100B=0
+report_1KiB="  <1 KiB  : ";           count_1KiB=0
+report_10KiB="  <10 KiB : ";          count_10KiB=0
+report_100KiB="  <100 KiB: ";         count_100KiB=0
+report_1MiB="  <1 MiB  : ";           count_1MiB=0
+report_10MiB="  <10 KMiB: ";          count_10MiB=0
+report_100MiB="  <100 MiB: ";         count_100MiB=0
+report_1GiB="  <1 GiB  : ";           count_1GiB=0
+report_gt_1GiB="  >=1 GiB : ";        count_bigger=0
+
+# function downscales # of files, in case of presence of "-n" option
+downscale(){
+    if [ "$1" -ne 0 ]; then
+        output=$(($1 * MAX_ROW))
+        output=$((output / BIGGEST))
+        if [ $output -eq 0 ]; then
+            output=1
+        fi
+    else
+        echo "$1"
+    fi
+    echo "$output"
+}
+
+# function adds hashes to the specific line of the report
+add_hashes(){
+    temp=$1
+    output="$2"
+    while [ $temp -gt 0 ]; do
+        temp=$((temp-1))
+        output="${output}#"
+    done
+    echo "$output"
+}
+
+# argument parsing using getopts utility
+while getopts ":i:n" o; do
+    case "${o}" in
+        i)
+            REGEX_FLAG=1
+            REGEX=${OPTARG}
+            ;;
+        n)
+            NORM_FLAG=1
+            ;;
+        *)
+            >&2 printf "usage: dirgraph [-i FILE_ERE] [-n] [DIR]\n"
+            exit 1
+            ;;
+    esac
+done
+
+OPTIND=$((OPTIND-1))
+shift $OPTIND
+
+if [ $# -eq 1 ]; then
+    if [ $1 == "." ]; then
+        DIR=$PWD
+    else
+        DIR=$1
+        if [ ! -d "$DIR" ]; then
+            >&2 printf "$DIR is not a directory.\n"
+            exit 1
+        fi
+    fi
+elif [ $# -eq 0 ]; then
+    DIR=$PWD
+else
+    >&2 printf "usage: dirgraph [-i FILE_ERE] [-n] [DIR]\n"
+    exit 1
+fi
+
+if [ "$REGEX_FLAG" -eq 1 ]; then
+    if [ "$(echo $(basename $DIR) | grep "$REGEX")" == "$(basename $DIR)" ]; then
+        >&2 printf "Root directory matches given REGEX.\n"
+        exit 1
+    fi
+    
+    # in case regex starts with "^", replace "^" with "^\/"
+    # this step is needed, because script is comparing pattern
+    # with whole path, not only filename
+    case $REGEX in ^*) REGEX=$(echo "$REGEX" | cut -c 2-) ; REGEX="^\/${REGEX}";;
+    esac
+    
+    # following steps, create alternative regex, same as original, but
+    # without "$" in the end, reason is same as in the step above
+    REGEX_2=$REGEX
+    case $REGEX in *$) REGEX_2=$(echo "$REGEX" | rev | cut -c 2- | rev);;
+    esac
+    
+    # getting the number of directories using find
+    ND=$(find "$DIR" -type d | awk -F "$DIR" '{print $2}' | grep -v "$REGEX\|$REGEX_2" | wc -l)
+    # removing spaces from output of wc command
+    ND="$(echo "${ND}" | tr -d '[:space:]')"
+    # getting the number of files using find
+    NF=$(find "$DIR" -type f | awk -F "$DIR" '{print $2}' | grep -v "$REGEX\|$REGEX_2" | wc -l )
+    # removing spaces from output of wc command
+    NF="$(echo "${NF}" | tr -d '[:space:]')"
+    # each size interval prints psecific number to the pom variable
+    pom=$(find "$DIR" -type f | while read -r line; do
+        if [ "$(echo "$line" | awk -F "$DIR" '{print $2}' | grep "$REGEX\|$REGEX_2")" ]; then
+            continue;
+        else
+            size=$(ls -1 -l "$line" | awk '{print $5}')
+            if [ "$size" -lt 100 ]; then printf "1"
+            elif [ "$size" -lt 1024 ]; then printf "2"
+            elif [ "$size" -lt 10240 ]; then printf "3"
+            elif [ "$size" -lt 102400 ]; then printf "4"
+            elif [ "$size" -lt 1048576 ]; then printf "5"
+            elif [ "$size" -lt 10485760 ]; then printf "6"
+            elif [ "$size" -lt 104857600 ]; then printf "7"
+            elif [ "$size" -lt 1073741824 ]; then printf "8"
+            else printf "9"
+            fi
+        fi
+    done )
+else
+    # getting the number of directories using find
+    ND=$(find "$DIR" -type d | wc -l)
+    # removing spaces from output of wc command
+    ND="$(echo "${ND}" | tr -d '[:space:]')"
+    # getting the number of files using find
+    NF=$(find "$DIR" -type f | wc -l )
+    # each size interval prints psecific number to the pom variable
+    NF="$(echo "${NF}" | tr -d '[:space:]')"
+    # each size interval prints psecific number to the pom variable
+    pom=$(find "$DIR" -type f | while read -r line; do
+        size=$(ls -1 -l "$line" | awk '{print $5}')
+        if [ "$size" -lt 100 ]; then printf "1"
+        elif [ "$size" -lt 1024 ]; then printf "2"
+        elif [ "$size" -lt 10240 ]; then printf "3"
+        elif [ "$size" -lt 102400 ]; then printf "4"
+        elif [ "$size" -lt 1048576 ]; then printf "5"
+        elif [ "$size" -lt 10485760 ]; then printf "6"
+        elif [ "$size" -lt 104857600 ]; then printf "7"
+        elif [ "$size" -lt 1073741824 ]; then printf "8"
+        else printf "9"
+        fi
+    done )
+fi
+
+# each line counts number of specific number in the pom variable
+# then the count is stored in count variable
+count_100B=$(echo "${pom}" | awk -F"1" '{print NF-1}')
+count_1KiB=$(echo "${pom}" | awk -F"2" '{print NF-1}')
+count_10KiB=$(echo "${pom}" | awk -F"3" '{print NF-1}')
+count_100KiB=$(echo "${pom}" | awk -F"4" '{print NF-1}')
+count_1MiB=$(echo "${pom}" | awk -F"5" '{print NF-1}')
+count_10MiB=$(echo "${pom}" | awk -F"6" '{print NF-1}')
+count_100MiB=$(echo "${pom}" | awk -F"7" '{print NF-1}')
+count_1GiB=$(echo "${pom}" | awk -F"8" '{print NF-1}')
+count_bigger=$(echo "${pom}" | awk -F"9" '{print NF-1}')
+
+if [ $NORM_FLAG -eq 1 ]; then
+    #testing presence of the terminal
+    test -t 0
+    if [ $? -eq 0 ]; then
+        # storing # of columns in terminal window
+        MAX_ROW=$(tput cols)
+        # substracting 13 from it, to get the free space in the line
+        MAX_ROW=$((MAX_ROW-13))
+    else
+        # if terminal is not present, 80 is the default number of columns
+        # substracting 13, for same reason as above
+        MAX_ROW=67
+    fi
+
+    # initially, count_100B is set as greatest value, and is stored
+    BIGGEST=$count_100B
+    # this sequence of conditions, figures out the greatest value, and stores it
+    if [ "$count_1KiB" -gt "$BIGGEST" ]; then BIGGEST=$count_1KiB; fi
+    if [ "$count_10KiB" -gt "$BIGGEST" ]; then BIGGEST=$count_10KiB; fi
+    if [ "$count_100KiB" -gt "$BIGGEST" ]; then BIGGEST=$count_100KiB; fi
+    if [ "$count_1MiB" -gt "$BIGGEST" ]; then BIGGEST=$count_1MiB; fi
+    if [ "$count_10MiB" -gt "$BIGGEST" ]; then BIGGEST=$count_10MiB; fi
+    if [ "$count_100MiB" -gt "$BIGGEST" ]; then BIGGEST=$count_100MiB; fi
+    if [ "$count_1GiB" -gt "$BIGGEST" ]; then BIGGEST=$count_1GiB; fi
+    if [ "$count_bigger" -gt "$BIGGEST" ]; then BIGGEST=$count_bigger; fi
+    
+    # downscaling only is the width of some line exceeds the free space in the line
+    if [ "$BIGGEST" -gt $MAX_ROW ]; then
+        count_100B=$(downscale $count_100B)
+        count_1KiB=$(downscale $count_1KiB)
+        count_10KiB=$(downscale $count_10KiB)
+        count_100KiB=$(downscale $count_100KiB)
+        count_1MiB=$(downscale $count_1MiB)
+        count_10MiB=$(downscale $count_10MiB)
+        count_100MiB=$(downscale $count_100MiB)
+        count_1GiB=$(downscale $count_1GiB)
+        count_bigger=$(downscale $count_bigger)
+    fi
+fi
+
+report_100B="$(add_hashes $count_100B "$report_100B")"
+report_1KiB="$(add_hashes $count_1KiB "$report_1KiB")"
+report_10KiB="$(add_hashes $count_10KiB "$report_10KiB")"
+report_100KiB="$(add_hashes $count_100KiB "$report_100KiB")"
+report_1MiB="$(add_hashes $count_1MiB "$report_1MiB")"
+report_10MiB="$(add_hashes $count_10MiB "$report_10MiB")"
+report_100MiB="$(add_hashes $count_100MiB "$report_100MiB")"
+report_1GiB="$(add_hashes $count_1GiB "$report_1GiB")"
+report_gt_1GiB="$(add_hashes $count_bigger "$report_gt_1GiB")"
+
+# concatenating parts of the report together
+FSHIST="$report_100B\n$report_1KiB\n$report_10KiB\n$report_100KiB\n$report_1MiB\n$report_10MiB\n$report_100MiB\n$report_1GiB\n$report_gt_1GiB\n"
+REPORT="Root directory: $DIR\nDirectories: $ND\nAll files: $NF\nFile size histogram:\n  $FSHIST"
+
+# finally, priting the report to the standard output
+printf "$REPORT"
